@@ -8,8 +8,21 @@ import logging
 import requests
 from typing import Optional, Dict, Any
 from functools import wraps
-import ollama
-from openai import OpenAI
+
+# Optional imports for Ollama (not needed on Kaggle)
+try:
+    import ollama
+    OLLAMA_AVAILABLE = True
+except ImportError:
+    OLLAMA_AVAILABLE = False
+    ollama = None
+
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    OpenAI = None
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -217,7 +230,14 @@ class OllamaProvider(LLMProvider):
         
         Args:
             base_url: Ollama server URL
+        
+        Raises:
+            LLMAPIError: If Ollama is not available
         """
+        if not OLLAMA_AVAILABLE:
+            raise LLMAPIError(
+                "Ollama is not available. Install with: pip install ollama"
+            )
         self.base_url = base_url
         logger.info(f"Ollama provider initialized with base_url: {base_url}")
     
@@ -254,6 +274,9 @@ class OllamaProvider(LLMProvider):
         """
         logger.debug(f"Calling Ollama with model: {model}, seed: {seed}")
         start_time = time.time()
+        
+        if not OLLAMA_AVAILABLE:
+            raise LLMAPIError("Ollama is not available. Install with: pip install ollama")
         
         try:
             response = ollama.chat(
@@ -355,13 +378,16 @@ def ollama_chat_api(
 
 def print_model_names():
     """Print available models (Ollama only, Mistral models are fixed)"""
-    try:
-        models = ollama.list()["models"]
-        print("Available Ollama models:")
-        for model in models:
-            print(f"  - {model['name']}")
-    except Exception as e:
-        logger.warning(f"Could not list Ollama models: {str(e)}")
+    if OLLAMA_AVAILABLE:
+        try:
+            models = ollama.list()["models"]
+            print("Available Ollama models:")
+            for model in models:
+                print(f"  - {model['name']}")
+        except Exception as e:
+            logger.warning(f"Could not list Ollama models: {str(e)}")
+    else:
+        print("Ollama is not available. Install with: pip install ollama")
     
     print("\nAvailable Mistral API models:")
     print("  - codestral-latest")
