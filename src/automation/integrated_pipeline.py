@@ -188,12 +188,15 @@ class IntegratedPipeline:
                 logger.info("Compilation failed, attempting auto-fix...")
                 # Try multiple fix attempts with iterative improvement
                 current_code = variant_code
+                last_errors = compilation_result.errors or []
+                
                 for fix_attempt in range(self.max_fix_attempts):
+                    # Use more attempts per iteration for better fixing
                     fixed_code, fix_success, _ = self.auto_fixer.fix_compilation_errors(
                         current_code,
-                        compilation_result.errors,
+                        last_errors,
                         language=self.language,
-                        max_attempts=1,  # One attempt per iteration
+                        max_attempts=2,  # 2 attempts per iteration for better results
                     )
                     
                     if fix_success:
@@ -219,11 +222,17 @@ class IntegratedPipeline:
                                 'executable': compilation_result.executable_path,
                                 'time': compilation_result.compilation_time,
                             }
+                            variant_code = fixed_code  # Update variant_code for final quality check
                             break
                         else:
-                            # Update errors for next iteration
-                            compilation_result.errors = compilation_result.errors or []
-                            logger.warning(f"Fix attempt {fix_attempt + 1} did not resolve all errors")
+                            # Update errors for next iteration - use new errors
+                            last_errors = compilation_result.errors or []
+                            error_count = len(last_errors)
+                            logger.warning(
+                                f"Fix attempt {fix_attempt + 1} did not resolve all errors "
+                                f"({error_count} errors remaining)"
+                            )
+                            # Continue to next attempt
                     else:
                         logger.warning(f"Fix attempt {fix_attempt + 1} failed to generate fix")
                         break
@@ -233,23 +242,18 @@ class IntegratedPipeline:
                     results['compilation'] = {
                         'status': compilation_result.status.value,
                         'success': False,
-                        'errors': compilation_result.errors,
+                        'errors': compilation_result.errors or [],
                         'warnings': compilation_result.warnings,
                         'executable': None,
                         'time': compilation_result.compilation_time,
                     }
-                
-                # Try compiling again (if not already done above)
-                    with open(temp_file_path, 'w') as f:
-                        f.write(fixed_code)
-                        f.flush()
-                        os.fsync(f.fileno())  # Ensure data is written to disk
-                    compilation_result = self.compiler_pipeline.compile(temp_file_path)
-                    results['compilation']['status'] = compilation_result.status.value
-                    results['compilation']['success'] = (
-                        compilation_result.status == CompilationStatus.SUCCESS
-                    )
-                    results['compilation']['errors'] = compilation_result.errors
+                    # Update variant_code with last fixed version if available
+                    if 'fixed_code' in results:
+                        variant_code = results['fixed_code']
+                        with open(temp_file_path, 'w') as f:
+                            f.write(variant_code)
+                            f.flush()
+                            os.fsync(f.fileno())
             
             # 3. Testing (if compilation successful)
             if (compilation_result.status == CompilationStatus.SUCCESS and 

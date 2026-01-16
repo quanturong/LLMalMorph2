@@ -62,30 +62,62 @@ class AutoFixer:
         error_text = "\n".join([f"  - {error}" for error in errors])
         
         system_prompt = (
-            f"You are an expert {language} programmer. "
-            "Your task is to fix compilation errors in code while maintaining "
-            "the exact same functionality. Return only the fixed code without explanations.\n\n"
-            "For missing header files (e.g., 'No such file or directory'), you can either:\n"
-            "1. Comment out the problematic #include if it's not essential\n"
-            "2. Add minimal stub declarations if the header is needed\n"
-            "3. Remove the include if it's not used in the code\n"
-            "Prioritize making the code compile while preserving functionality."
+            f"You are an expert {language} programmer specializing in fixing compilation errors. "
+            "Your task is to fix ALL compilation errors to make the code compile successfully.\n\n"
+            "CRITICAL INSTRUCTIONS:\n"
+            "1. For missing header files (e.g., 'No such file or directory', 'fatal error'):\n"
+            "   - If the header is NOT used in the code: REMOVE the #include line completely\n"
+            "   - If the header IS used: Comment out the #include and add minimal stub declarations\n"
+            "   - Example: If 'dokani.h' is missing, comment out '#include <dokani.h>' and add:\n"
+            "     // #include <dokani.h>  // Missing header - commented out\n"
+            "     // Minimal stubs if needed\n\n"
+            "2. For undefined types/functions:\n"
+            "   - Add forward declarations or minimal implementations\n"
+            "   - Use void* for unknown types if needed\n\n"
+            "3. For syntax errors:\n"
+            "   - Fix all syntax issues completely\n"
+            "   - Ensure all brackets, parentheses, and semicolons are correct\n\n"
+            "4. IMPORTANT: The code MUST compile successfully after your fix.\n"
+            "   Return ONLY the complete fixed code, nothing else."
         )
         
+        # Analyze errors to provide better context
+        missing_headers = [e for e in errors if 'no such file' in e.lower() or 'fatal error' in e.lower()]
+        syntax_errors = [e for e in errors if 'error:' in e.lower() and 'no such file' not in e.lower()]
+        
+        error_context = ""
+        if missing_headers:
+            error_context += "\nMISSING HEADERS DETECTED:\n"
+            for err in missing_headers[:5]:  # Limit to first 5
+                error_context += f"  - {err}\n"
+            error_context += "\nACTION REQUIRED: Comment out or remove these #include statements.\n\n"
+        
+        if syntax_errors:
+            error_context += "SYNTAX ERRORS:\n"
+            for err in syntax_errors[:5]:  # Limit to first 5
+                error_context += f"  - {err}\n"
+            error_context += "\nACTION REQUIRED: Fix all syntax errors.\n\n"
+        
         user_prompt = f"""
-The following {language} code has compilation errors:
+The following {language} code has compilation errors that prevent it from compiling:
 
 ```{language}
 {source_code}
 ```
 
-Compilation Errors:
+COMPILATION ERRORS:
 {error_text}
 
-Please fix these compilation errors while maintaining the same functionality.
-For missing header files, comment them out or add minimal stubs if needed.
-Return only the fixed code within code blocks (```{language} ... ```).
-Do not include any explanations or comments outside the code blocks.
+{error_context}
+YOUR TASK:
+1. Fix ALL compilation errors to make the code compile successfully
+2. For missing headers: Comment them out or remove them, add stubs only if absolutely necessary
+3. For syntax errors: Fix them completely
+4. Maintain the core functionality of the code
+5. Return ONLY the complete fixed code within code blocks (```{language} ... ```)
+6. Do NOT include any explanations, comments, or text outside the code blocks
+
+The fixed code MUST compile without errors.
 """
         
         fixed_code = source_code
