@@ -98,10 +98,18 @@ class IntegratedPipeline:
             security_issues = self.qa.check_security(variant_code, source_file)
             quality_score = self.qa.get_quality_score(variant_code)
             
+            # Convert issues to dict, handling enums
+            def issue_to_dict(issue):
+                """Convert QualityIssue to dict, handling enums"""
+                issue_dict = issue.__dict__.copy()
+                if 'severity' in issue_dict and hasattr(issue_dict['severity'], 'value'):
+                    issue_dict['severity'] = issue_dict['severity'].value
+                return issue_dict
+            
             results['quality'] = {
                 'syntax_valid': is_valid,
-                'syntax_issues': [issue.__dict__ for issue in syntax_issues],
-                'security_issues': [issue.__dict__ for issue in security_issues],
+                'syntax_issues': [issue_to_dict(issue) for issue in syntax_issues],
+                'security_issues': [issue_to_dict(issue) for issue in security_issues],
                 'quality_score': quality_score,
             }
             
