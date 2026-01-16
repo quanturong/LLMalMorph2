@@ -82,14 +82,32 @@ class IntegratedPipeline:
         
         # Write variant to temp file for compilation
         import tempfile
+        # Ensure temp directory exists
+        temp_dir = tempfile.gettempdir()
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        # Create temp file with explicit path
+        file_ext = os.path.splitext(source_file)[1] or ('.c' if self.language == 'c' else '.cpp')
         temp_file = tempfile.NamedTemporaryFile(
             mode='w',
-            suffix=os.path.splitext(source_file)[1],
-            delete=False
+            suffix=file_ext,
+            delete=False,
+            dir=temp_dir
         )
         temp_file.write(variant_code)
+        temp_file.flush()  # Ensure data is written
         temp_file.close()
         temp_file_path = temp_file.name
+        
+        # Verify file was created
+        if not os.path.exists(temp_file_path):
+            logger.error(f"Failed to create temp file: {temp_file_path}")
+            results['compilation'] = {
+                'status': 'failed',
+                'success': False,
+                'errors': [f"Failed to create temp file: {temp_file_path}"],
+            }
+            return results
         
         try:
             # 1. Quality checks
@@ -205,10 +223,19 @@ class IntegratedPipeline:
                 logger.warning("✗ Variant processing failed")
         
         finally:
-            # Cleanup
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-            self.compiler_pipeline.cleanup()
+            # Cleanup temp file (only if it exists and we created it)
+            try:
+                if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                    logger.debug(f"Cleaned up temp file: {temp_file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp file: {e}")
+            
+            # Cleanup compilation pipeline
+            try:
+                self.compiler_pipeline.cleanup()
+            except Exception as e:
+                logger.warning(f"Failed to cleanup compilation pipeline: {e}")
         
         return results
 

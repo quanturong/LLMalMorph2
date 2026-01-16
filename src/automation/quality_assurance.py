@@ -97,13 +97,26 @@ class QualityAssurance:
         issues = []
         
         # Write to temp file
+        temp_dir = tempfile.gettempdir()
+        os.makedirs(temp_dir, exist_ok=True)
+        
         with tempfile.NamedTemporaryFile(
             mode='w',
             suffix='.c' if self.language == 'c' else '.cpp',
-            delete=False
+            delete=False,
+            dir=temp_dir
         ) as f:
             f.write(code)
+            f.flush()  # Ensure data is written
             temp_file = f.name
+        
+        # Verify file exists
+        if not os.path.exists(temp_file):
+            issues.append(QualityIssue(
+                severity=IssueSeverity.ERROR,
+                message=f"Failed to create temp file for syntax check: {temp_file}",
+            ))
+            return False, issues
         
         try:
             # Use compiler to check syntax only (no linking)
@@ -156,8 +169,12 @@ class QualityAssurance:
             )]
         
         finally:
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
+            # Cleanup temp file safely
+            try:
+                if 'temp_file' in locals() and os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp file in syntax check: {e}")
     
     def check_security(self, code: str, file_path: Optional[str] = None) -> List[QualityIssue]:
         """

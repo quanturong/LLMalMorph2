@@ -188,6 +188,17 @@ class CompilationPipeline:
         logger.info(f"Compiling {source_file} with {self.compiler}...")
         logger.debug(f"Command: {' '.join(cmd)}")
         
+        # Ensure working directory exists
+        os.makedirs(self.working_dir, exist_ok=True)
+        
+        # Ensure source file exists
+        if not os.path.exists(source_file):
+            logger.error(f"Source file not found: {source_file}")
+            return CompilationResult(
+                status=CompilationStatus.FAILED,
+                errors=[f"Source file not found: {source_file}"],
+            )
+        
         start_time = time.time()
         
         try:
