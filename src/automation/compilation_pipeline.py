@@ -92,6 +92,8 @@ class CompilationPipeline:
         self.language = language.lower()
         self.timeout = timeout
         self.working_dir = working_dir or tempfile.mkdtemp()
+        # Ensure working directory exists
+        os.makedirs(self.working_dir, exist_ok=True)
         self.compiler = compiler or self._detect_compiler()
         
         logger.info(

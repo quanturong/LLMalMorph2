@@ -82,20 +82,21 @@ class IntegratedPipeline:
         
         # Write variant to temp file for compilation
         import tempfile
-        # Ensure temp directory exists
-        temp_dir = tempfile.gettempdir()
-        os.makedirs(temp_dir, exist_ok=True)
+        # Use compiler pipeline's working directory to ensure file is accessible
+        working_dir = self.compiler_pipeline.working_dir
+        os.makedirs(working_dir, exist_ok=True)
         
-        # Create temp file with explicit path
+        # Create temp file in working directory
         file_ext = os.path.splitext(source_file)[1] or ('.c' if self.language == 'c' else '.cpp')
         temp_file = tempfile.NamedTemporaryFile(
             mode='w',
             suffix=file_ext,
             delete=False,
-            dir=temp_dir
+            dir=working_dir
         )
         temp_file.write(variant_code)
-        temp_file.flush()  # Ensure data is written
+        temp_file.flush()  # Ensure data is written to buffer
+        os.fsync(temp_file.fileno())  # Ensure data is written to disk
         temp_file.close()
         temp_file_path = temp_file.name
         
@@ -131,9 +132,22 @@ class IntegratedPipeline:
                 'quality_score': quality_score,
             }
             
+            # Auto-fix if there are syntax errors or missing header warnings
             if not is_valid:
-                logger.warning("Syntax errors detected")
-                if auto_fix:
+                has_errors = any(
+                    hasattr(issue.severity, 'value') and issue.severity.value == 'error' 
+                    or str(issue.severity) == 'IssueSeverity.ERROR'
+                    for issue in syntax_issues
+                )
+                has_missing_headers = any(
+                    'no such file' in issue.message.lower() or 
+                    'fatal error' in issue.message.lower() or
+                    'no such file or directory' in issue.message.lower()
+                    for issue in syntax_issues
+                )
+                
+                if auto_fix and (has_errors or has_missing_headers):
+                    logger.warning("Syntax errors or missing headers detected")
                     logger.info("Attempting auto-fix...")
                     fixed_code, fix_success, _ = self.auto_fixer.fix_compilation_errors(
                         variant_code,
@@ -148,7 +162,13 @@ class IntegratedPipeline:
                         # Rewrite temp file with fixed code
                         with open(temp_file_path, 'w') as f:
                             f.write(fixed_code)
+                            f.flush()
+                            os.fsync(f.fileno())  # Ensure data is written to disk
                         logger.info("✓ Auto-fix successful")
+                        # Re-check syntax after fix
+                        is_valid, syntax_issues = self.qa.check_syntax(variant_code, temp_file_path)
+                        results['quality']['syntax_valid'] = is_valid
+                        results['quality']['syntax_issues'] = [issue_to_dict(issue) for issue in syntax_issues]
                     else:
                         logger.warning("✗ Auto-fix failed")
             
@@ -179,6 +199,8 @@ class IntegratedPipeline:
                     # Try compiling again
                     with open(temp_file_path, 'w') as f:
                         f.write(fixed_code)
+                        f.flush()
+                        os.fsync(f.fileno())  # Ensure data is written to disk
                     compilation_result = self.compiler_pipeline.compile(temp_file_path)
                     results['compilation']['status'] = compilation_result.status.value
                     results['compilation']['success'] = (

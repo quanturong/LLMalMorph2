@@ -144,8 +144,20 @@ class QualityAssurance:
                 match = re.match(r'(.+):(\d+):(\d+):\s*(error|warning):\s*(.+)', line)
                 if match:
                     file, line_num, col, severity, message = match.groups()
+                    # Check if it's a missing header file error
+                    # These are often expected for standalone files and can be auto-fixed
+                    is_missing_header = (
+                        'no such file or directory' in message.lower() or
+                        'fatal error' in severity.lower() and 'no such file' in message.lower()
+                    )
+                    
+                    # Missing headers are warnings (can be auto-fixed), other errors are errors
+                    issue_severity = IssueSeverity.WARNING if is_missing_header else (
+                        IssueSeverity.ERROR if severity == 'error' else IssueSeverity.WARNING
+                    )
+                    
                     issues.append(QualityIssue(
-                        severity=IssueSeverity.ERROR if severity == 'error' else IssueSeverity.WARNING,
+                        severity=issue_severity,
                         message=message,
                         line=int(line_num),
                         column=int(col),
@@ -154,8 +166,10 @@ class QualityAssurance:
                 else:
                     # Generic error
                     if 'error:' in line.lower():
+                        # Check if it's a missing header
+                        is_missing_header = 'no such file' in line.lower()
                         issues.append(QualityIssue(
-                            severity=IssueSeverity.ERROR,
+                            severity=IssueSeverity.WARNING if is_missing_header else IssueSeverity.ERROR,
                             message=line,
                         ))
             

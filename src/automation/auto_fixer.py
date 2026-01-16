@@ -64,7 +64,12 @@ class AutoFixer:
         system_prompt = (
             f"You are an expert {language} programmer. "
             "Your task is to fix compilation errors in code while maintaining "
-            "the exact same functionality. Return only the fixed code without explanations."
+            "the exact same functionality. Return only the fixed code without explanations.\n\n"
+            "For missing header files (e.g., 'No such file or directory'), you can either:\n"
+            "1. Comment out the problematic #include if it's not essential\n"
+            "2. Add minimal stub declarations if the header is needed\n"
+            "3. Remove the include if it's not used in the code\n"
+            "Prioritize making the code compile while preserving functionality."
         )
         
         user_prompt = f"""
@@ -78,6 +83,7 @@ Compilation Errors:
 {error_text}
 
 Please fix these compilation errors while maintaining the same functionality.
+For missing header files, comment them out or add minimal stubs if needed.
 Return only the fixed code within code blocks (```{language} ... ```).
 Do not include any explanations or comments outside the code blocks.
 """
