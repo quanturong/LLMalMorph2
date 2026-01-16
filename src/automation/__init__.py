@@ -14,6 +14,7 @@ from .quality_assurance import (
     QualityIssue,
     IssueSeverity,
 )
+from .integrated_pipeline import IntegratedPipeline
 
 __all__ = [
     'CompilationPipeline',
@@ -24,5 +25,6 @@ __all__ = [
     'QualityAssurance',
     'QualityIssue',
     'IssueSeverity',
+    'IntegratedPipeline',
 ]
 
