@@ -186,17 +186,60 @@ class IntegratedPipeline:
             
             if compilation_result.status == CompilationStatus.FAILED and auto_fix:
                 logger.info("Compilation failed, attempting auto-fix...")
-                fixed_code, fix_success, _ = self.auto_fixer.fix_compilation_errors(
-                    variant_code,
-                    compilation_result.errors,
-                    language=self.language,
-                    max_attempts=self.max_fix_attempts,
-                )
+                # Try multiple fix attempts with iterative improvement
+                current_code = variant_code
+                for fix_attempt in range(self.max_fix_attempts):
+                    fixed_code, fix_success, _ = self.auto_fixer.fix_compilation_errors(
+                        current_code,
+                        compilation_result.errors,
+                        language=self.language,
+                        max_attempts=1,  # One attempt per iteration
+                    )
+                    
+                    if fix_success:
+                        current_code = fixed_code
+                        results['fixed_code'] = fixed_code
+                        # Update temp file with fixed code
+                        with open(temp_file_path, 'w') as f:
+                            f.write(fixed_code)
+                            f.flush()
+                            os.fsync(f.fileno())
+                        
+                        # Try compiling again to verify fix
+                        logger.info(f"Re-compiling after fix attempt {fix_attempt + 1}...")
+                        compilation_result = self.compiler_pipeline.compile(temp_file_path)
+                        
+                        if compilation_result.status == CompilationStatus.SUCCESS:
+                            logger.info("✓ Compilation successful after auto-fix!")
+                            results['compilation'] = {
+                                'status': compilation_result.status.value,
+                                'success': True,
+                                'errors': [],
+                                'warnings': compilation_result.warnings,
+                                'executable': compilation_result.executable_path,
+                                'time': compilation_result.compilation_time,
+                            }
+                            break
+                        else:
+                            # Update errors for next iteration
+                            compilation_result.errors = compilation_result.errors or []
+                            logger.warning(f"Fix attempt {fix_attempt + 1} did not resolve all errors")
+                    else:
+                        logger.warning(f"Fix attempt {fix_attempt + 1} failed to generate fix")
+                        break
                 
-                if fix_success:
-                    variant_code = fixed_code
-                    results['fixed_code'] = fixed_code
-                    # Try compiling again
+                # Update final compilation result
+                if compilation_result.status != CompilationStatus.SUCCESS:
+                    results['compilation'] = {
+                        'status': compilation_result.status.value,
+                        'success': False,
+                        'errors': compilation_result.errors,
+                        'warnings': compilation_result.warnings,
+                        'executable': None,
+                        'time': compilation_result.compilation_time,
+                    }
+                
+                # Try compiling again (if not already done above)
                     with open(temp_file_path, 'w') as f:
                         f.write(fixed_code)
                         f.flush()

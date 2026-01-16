@@ -108,8 +108,33 @@ Do not include any explanations or comments outside the code blocks.
                     fixed_code = extracted_code
                     logger.info(f"✓ Generated fix (attempt {attempt + 1})")
                     
-                    # Verify fix (would need to compile again)
-                    # For now, return the fixed code
+                    # Update user_prompt for next attempt with fixed code if needed
+                    if attempt < max_attempts - 1:
+                        user_prompt = f"""
+The following {language} code still has compilation errors after previous fix attempt:
+
+```{language}
+{fixed_code}
+```
+
+Previous Errors:
+{error_text}
+
+Please fix the remaining compilation errors. Make sure to:
+1. Comment out or remove missing header includes
+2. Add minimal stub declarations if needed
+3. Fix any syntax errors
+4. Ensure the code compiles successfully
+
+Return only the fixed code within code blocks (```{language} ... ```).
+"""
+                    
+                    # Return fixed code - verification will be done by compilation step
+                    # If this is the last attempt, return what we have
+                    if attempt == max_attempts - 1:
+                        return fixed_code, True, []
+                    # Otherwise, continue to next attempt if compilation still fails
+                    # (This will be handled by the caller)
                     return fixed_code, True, []
                 else:
                     logger.warning(f"No code extracted from response (attempt {attempt + 1})")
