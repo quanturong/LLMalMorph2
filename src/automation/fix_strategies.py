@@ -141,9 +141,10 @@ class FixStrategies:
             if ErrorAnalyzer:
                 try:
                     error_infos = ErrorAnalyzer.classify_errors(errors)
-                    missing_headers = ErrorAnalyzer.extract_missing_headers(error_infos)
+                    strategy = ErrorAnalyzer.get_fix_strategy(error_infos)
                     
                     # For missing headers, comment out the include lines
+                    missing_headers = strategy.get('missing_headers', [])
                     if missing_headers:
                         for i, line in enumerate(lines):
                             if line.strip().startswith('#include'):
@@ -154,8 +155,55 @@ class FixStrategies:
                                     if header_basename in line or header in line:
                                         lines_to_comment.add(i)
                                         break
-                except Exception:
+                    
+                    # For undefined symbols, try to comment out function calls or declarations
+                    undefined_symbols = strategy.get('undefined_symbols', [])
+                    if undefined_symbols and not lines_to_comment:
+                        # If we don't have line numbers, try to find and comment out symbol usage
+                        for symbol in undefined_symbols[:3]:  # Limit to first 3 to avoid over-commenting
+                            symbol_escaped = re.escape(symbol)
+                            # Pattern to find function calls or declarations
+                            for i, line in enumerate(lines):
+                                # Comment out function calls (e.g., "function_name(")
+                                if re.search(rf'\b{symbol_escaped}\s*\(', line):
+                                    lines_to_comment.add(i)
+                                    break
+                                # Comment out variable usage (e.g., "variable_name;")
+                                elif re.search(rf'\b{symbol_escaped}\s*[;=]', line):
+                                    lines_to_comment.add(i)
+                                    break
+                except Exception as e:
+                    logger.debug(f"ErrorAnalyzer failed in fallback: {e}")
                     pass
+            
+            # If no lines were identified but we have errors, try a more aggressive approach
+            if not lines_to_comment and errors:
+                # Try to find and comment out lines with common error patterns
+                for error in errors:
+                    # Look for undefined symbols in the error
+                    undefined_match = re.search(r"undefined reference to\s*['\"]([^'\"]+)['\"]", error, re.IGNORECASE)
+                    if undefined_match:
+                        symbol = undefined_match.group(1)
+                        # Find lines using this symbol
+                        for i, line in enumerate(lines):
+                            if symbol in line and not line.strip().startswith(comment_char):
+                                # Only comment out if it's a function call or assignment
+                                if re.search(rf'\b{re.escape(symbol)}\s*[\(=;]', line):
+                                    lines_to_comment.add(i)
+                                    if len(lines_to_comment) >= 3:  # Limit to 3 lines
+                                        break
+                        if len(lines_to_comment) >= 3:
+                            break
+                    
+                    # Look for missing headers in the error
+                    header_match = re.search(r"fatal error:\s*([^:]+\.h[^:]*):", error, re.IGNORECASE)
+                    if header_match:
+                        header_name = header_match.group(1).strip()
+                        # Find include lines
+                        for i, line in enumerate(lines):
+                            if line.strip().startswith('#include') and header_name in line:
+                                lines_to_comment.add(i)
+                                break
             
             # Comment out problematic lines
             result_lines = []
