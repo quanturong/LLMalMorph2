@@ -267,14 +267,19 @@ class IntegratedPipeline:
                             logger.warning(f"Fix attempt {fix_attempt + 1} failed: Invalid fixed code type: {type(fixed_code)}")
                         else:
                             logger.warning(f"Fix attempt {fix_attempt + 1} failed to generate fix")
-                        
-                        # Try fallback strategy on last attempt
-                        if fix_attempt == adaptive_attempts - 1:
-                            logger.info("Attempting fallback strategy...")
+                        break
+                
+                # Try fallback strategy after all attempts if compilation still failed
+                if compilation_result.status != CompilationStatus.SUCCESS:
+                    # Check if we should try fallback (only if we have few errors remaining)
+                    remaining_error_count = len(compilation_result.errors or [])
+                    if remaining_error_count > 0 and remaining_error_count <= 5:
+                        logger.info(f"Attempting fallback strategy for {remaining_error_count} remaining error(s)...")
+                        try:
                             from .fix_strategies import FixStrategies
                             fallback_code = FixStrategies.apply_fallback_strategy(
                                 current_code,
-                                last_errors,
+                                compilation_result.errors or [],
                                 language=self.language
                             )
                             
@@ -288,10 +293,11 @@ class IntegratedPipeline:
                                 
                                 # Try compiling with fallback
                                 logger.info("Re-compiling with fallback fixes...")
-                                compilation_result = self.compiler_pipeline.compile(temp_file_path)
+                                fallback_compilation = self.compiler_pipeline.compile(temp_file_path)
                                 
-                                if compilation_result.status == CompilationStatus.SUCCESS:
+                                if fallback_compilation.status == CompilationStatus.SUCCESS:
                                     logger.info("✓ Compilation successful with fallback strategy!")
+                                    compilation_result = fallback_compilation
                                     results['compilation'] = {
                                         'status': compilation_result.status.value,
                                         'success': True,
@@ -301,8 +307,10 @@ class IntegratedPipeline:
                                         'time': compilation_result.compilation_time,
                                     }
                                     variant_code = fallback_code
-                                    break
-                        break
+                                else:
+                                    logger.info(f"Fallback strategy reduced errors from {remaining_error_count} to {len(fallback_compilation.errors or [])}")
+                        except Exception as e:
+                            logger.warning(f"Fallback strategy failed: {e}")
                 
                 # Update final compilation result
                 if compilation_result.status != CompilationStatus.SUCCESS:

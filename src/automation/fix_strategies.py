@@ -101,35 +101,59 @@ class FixStrategies:
         Returns:
             Code with problematic sections commented out
         """
-        if not ErrorAnalyzer:
+        if not errors:
             return source_code
         
         try:
-            error_infos = ErrorAnalyzer.classify_errors(errors)
             lines = source_code.split('\n')
             lines_to_comment = set()
+            comment_char = "//" if language in ['c', 'cpp'] else "#"
             
-            # Find lines with errors
-            for error_info in error_infos:
-                if error_info.line_num and 1 <= error_info.line_num <= len(lines):
-                    line_idx = error_info.line_num - 1
-                    lines_to_comment.add(line_idx)
+            # Extract line numbers from errors
+            for error in errors:
+                # Pattern: "file.c:123:45: error: ..."
+                match = re.search(r':(\d+):\d+:', error)
+                if match:
+                    try:
+                        line_num = int(match.group(1))
+                        if 1 <= line_num <= len(lines):
+                            line_idx = line_num - 1
+                            lines_to_comment.add(line_idx)
+                            
+                            # Also comment out surrounding lines for context
+                            if line_idx > 0:
+                                lines_to_comment.add(line_idx - 1)
+                            if line_idx < len(lines) - 1:
+                                lines_to_comment.add(line_idx + 1)
+                    except (ValueError, IndexError):
+                        continue
+            
+            # If ErrorAnalyzer is available, use it for better analysis
+            if ErrorAnalyzer:
+                try:
+                    error_infos = ErrorAnalyzer.classify_errors(errors)
+                    strategy = ErrorAnalyzer.get_fix_strategy(error_infos)
                     
-                    # Also comment out surrounding lines for context
-                    if line_idx > 0:
-                        lines_to_comment.add(line_idx - 1)
-                    if line_idx < len(lines) - 1:
-                        lines_to_comment.add(line_idx + 1)
+                    # For missing headers, comment out the include lines
+                    if strategy.get('has_missing_headers'):
+                        missing_headers = strategy.get('missing_headers', [])
+                        for i, line in enumerate(lines):
+                            if line.strip().startswith('#include'):
+                                # Check if this include matches any missing header
+                                for header in missing_headers:
+                                    if header in line:
+                                        lines_to_comment.add(i)
+                                        break
+                except Exception:
+                    pass
             
             # Comment out problematic lines
             result_lines = []
             for i, line in enumerate(lines):
-                if i in lines_to_comment and line.strip() and not line.strip().startswith('//'):
+                if i in lines_to_comment and line.strip() and not line.strip().startswith(comment_char):
                     # Comment out the line
-                    if language == 'c' or language == 'cpp':
-                        result_lines.append(f"// FIXME: Commented out due to compilation error\n// {line}")
-                    else:
-                        result_lines.append(f"# FIXME: Commented out due to compilation error\n# {line}")
+                    result_lines.append(f"{comment_char} FIXME: Commented out due to compilation error")
+                    result_lines.append(f"{comment_char} {line}")
                 else:
                     result_lines.append(line)
             
@@ -212,45 +236,75 @@ class FixStrategies:
             Code with pattern-based fixes applied
         """
         fixed_code = source_code
+        comment_char = "//" if language in ['c', 'cpp'] else "#"
         
         # Pattern 1: Missing header - comment out
-        missing_header_pattern = r"fatal error:\s*([^:]+\.h[^:]*):"
-        for error in errors:
-            match = re.search(missing_header_pattern, error, re.IGNORECASE)
-            if match:
-                header_name = match.group(1).strip()
-                # Find and comment out the include
-                include_pattern = rf'#include\s*[<"]{re.escape(header_name)}[>"]'
-                fixed_code = re.sub(
-                    include_pattern,
-                    lambda m: f"// {m.group(0)}  // Commented: missing header",
-                    fixed_code,
-                    flags=re.IGNORECASE
-                )
+        missing_header_patterns = [
+            r"fatal error:\s*([^:]+\.h[^:]*):",
+            r"no such file or directory:\s*['\"]?([^:'\"]+\.h[^:'\"]*)['\"]?",
+            r"cannot open source file\s*['\"]([^'\"]+\.h[^'\"]*)['\"]",
+        ]
         
-        # Pattern 2: Undefined function - add forward declaration
-        undefined_func_pattern = r"undefined reference to ['\"]([^'\"]+)['\"]"
-        forward_decls = []
+        commented_headers = set()
         for error in errors:
-            match = re.search(undefined_func_pattern, error, re.IGNORECASE)
-            if match:
-                func_name = match.group(1)
-                # Try to infer function signature (simplified)
-                if func_name not in forward_decls:
-                    forward_decls.append(f"// Forward declaration for {func_name}\nvoid {func_name}();")
+            for pattern in missing_header_patterns:
+                match = re.search(pattern, error, re.IGNORECASE)
+                if match:
+                    header_name = match.group(1).strip()
+                    if header_name not in commented_headers:
+                        commented_headers.add(header_name)
+                        # Find and comment out the include (handle both <header> and "header" formats)
+                        include_patterns = [
+                            rf'#include\s*<{re.escape(header_name)}>',
+                            rf'#include\s*"{re.escape(header_name)}"',
+                            rf'#include\s*<[^>]*{re.escape(header_name.split("/")[-1])}[^>]*>',  # Partial match
+                            rf'#include\s*"[^"]*{re.escape(header_name.split("/")[-1])}[^"]*"',  # Partial match
+                        ]
+                        for include_pattern in include_patterns:
+                            fixed_code = re.sub(
+                                include_pattern,
+                                lambda m: f"{comment_char} {m.group(0)}  // Commented: missing header",
+                                fixed_code,
+                                flags=re.IGNORECASE
+                            )
         
-        if forward_decls:
-            # Add forward declarations after includes
-            include_end = fixed_code.rfind('#include')
-            if include_end != -1:
-                # Find end of last include
-                next_line = fixed_code.find('\n', include_end)
-                if next_line != -1:
-                    fixed_code = (
-                        fixed_code[:next_line + 1] +
-                        '\n'.join(forward_decls) + '\n' +
-                        fixed_code[next_line + 1:]
-                    )
+        # Pattern 2: Undefined function - add forward declaration (only for C, not C++)
+        if language == 'c':
+            undefined_func_pattern = r"undefined reference to ['\"]([^'\"]+)['\"]"
+            forward_decls = []
+            seen_funcs = set()
+            for error in errors:
+                match = re.search(undefined_func_pattern, error, re.IGNORECASE)
+                if match:
+                    func_name = match.group(1)
+                    # Skip C++ mangled names and common library functions
+                    if func_name not in seen_funcs and not func_name.startswith('_Z'):
+                        seen_funcs.add(func_name)
+                        forward_decls.append(f"{comment_char} Forward declaration for {func_name}\nvoid {func_name}();")
+            
+            if forward_decls:
+                # Add forward declarations after includes
+                include_end = fixed_code.rfind('#include')
+                if include_end != -1:
+                    # Find end of last include block
+                    next_line = fixed_code.find('\n', include_end)
+                    while next_line != -1 and next_line < len(fixed_code) - 1:
+                        next_char = fixed_code[next_line + 1]
+                        if next_char == '#':
+                            # Check if it's another include
+                            if fixed_code[next_line + 1:next_line + 9] == '#include':
+                                next_line = fixed_code.find('\n', next_line + 1)
+                            else:
+                                break
+                        else:
+                            break
+                    
+                    if next_line != -1:
+                        fixed_code = (
+                            fixed_code[:next_line + 1] +
+                            '\n'.join(forward_decls) + '\n' +
+                            fixed_code[next_line + 1:]
+                        )
         
         return fixed_code
 
