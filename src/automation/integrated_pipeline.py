@@ -156,7 +156,7 @@ class IntegratedPipeline:
                         max_attempts=self.max_fix_attempts,
                     )
                     
-                    if fix_success:
+                    if fix_success and fixed_code and isinstance(fixed_code, str):
                         variant_code = fixed_code
                         results['fixed_code'] = fixed_code
                         # Rewrite temp file with fixed code
@@ -170,7 +170,12 @@ class IntegratedPipeline:
                         results['quality']['syntax_valid'] = is_valid
                         results['quality']['syntax_issues'] = [issue_to_dict(issue) for issue in syntax_issues]
                     else:
-                        logger.warning("✗ Auto-fix failed")
+                        if not fixed_code:
+                            logger.warning("✗ Auto-fix failed: No fixed code returned")
+                        elif not isinstance(fixed_code, str):
+                            logger.warning(f"✗ Auto-fix failed: Invalid fixed code type: {type(fixed_code)}")
+                        else:
+                            logger.warning("✗ Auto-fix failed")
             
             # 2. Compilation
             logger.info("Compiling...")
@@ -199,7 +204,7 @@ class IntegratedPipeline:
                         max_attempts=2,  # 2 attempts per iteration for better results
                     )
                     
-                    if fix_success:
+                    if fix_success and fixed_code and isinstance(fixed_code, str):
                         current_code = fixed_code
                         results['fixed_code'] = fixed_code
                         # Update temp file with fixed code
@@ -234,7 +239,12 @@ class IntegratedPipeline:
                             )
                             # Continue to next attempt
                     else:
-                        logger.warning(f"Fix attempt {fix_attempt + 1} failed to generate fix")
+                        if not fixed_code:
+                            logger.warning(f"Fix attempt {fix_attempt + 1} failed: No fixed code returned")
+                        elif not isinstance(fixed_code, str):
+                            logger.warning(f"Fix attempt {fix_attempt + 1} failed: Invalid fixed code type: {type(fixed_code)}")
+                        else:
+                            logger.warning(f"Fix attempt {fix_attempt + 1} failed to generate fix")
                         break
                 
                 # Update final compilation result
@@ -248,7 +258,7 @@ class IntegratedPipeline:
                         'time': compilation_result.compilation_time,
                     }
                     # Update variant_code with last fixed version if available
-                    if 'fixed_code' in results:
+                    if 'fixed_code' in results and results['fixed_code'] and isinstance(results['fixed_code'], str):
                         variant_code = results['fixed_code']
                         with open(temp_file_path, 'w') as f:
                             f.write(variant_code)

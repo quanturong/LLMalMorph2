@@ -164,12 +164,23 @@ Return only the fixed code within code blocks (```{language} ... ```).
                     # Return fixed code - verification will be done by compilation step
                     # If this is the last attempt, return what we have
                     if attempt == max_attempts - 1:
-                        return fixed_code, True, []
+                        # Ensure we return a valid string
+                        if fixed_code and isinstance(fixed_code, str):
+                            return fixed_code, True, []
+                        else:
+                            return source_code, False, errors
                     # Otherwise, continue to next attempt if compilation still fails
                     # (This will be handled by the caller)
-                    return fixed_code, True, []
+                    # Ensure we return a valid string
+                    if fixed_code and isinstance(fixed_code, str):
+                        return fixed_code, True, []
+                    else:
+                        return source_code, False, errors
                 else:
                     logger.warning(f"No code extracted from response (attempt {attempt + 1})")
+                    # If no code extracted and this is the last attempt, return original code
+                    if attempt == max_attempts - 1:
+                        return source_code, False, errors
             
             except LLMAPIError as e:
                 logger.error(f"LLM API error: {e}")
@@ -180,7 +191,10 @@ Return only the fixed code within code blocks (```{language} ... ```).
                 break
         
         logger.warning("Failed to fix errors after all attempts")
-        return fixed_code, False, remaining_errors
+        # Ensure we always return a valid string
+        if fixed_code and isinstance(fixed_code, str):
+            return fixed_code, False, remaining_errors
+        return source_code, False, remaining_errors
     
     def fix_code_issues(
         self,
