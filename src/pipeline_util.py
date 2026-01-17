@@ -41,6 +41,8 @@ def get_llm_name_from_input(llm_input):
     llm_name_to_model_name = {
         "deepseek_33b": "deepseek-coder:33b-instruct",
         "deepseek_v2_16b": "deepseek-coder-v2:16b-lite-instruct-q4_0",
+        "deepseek-coder": "deepseek-coder",   # DeepSeek API
+        "deepseek-chat": "deepseek-chat",     # DeepSeek Chat API
         "starcoder2": "starcoder2:instruct",
         "codestral": "codestral:latest",
         "codestral-2508": "codestral-2508",   # thêm dòng này

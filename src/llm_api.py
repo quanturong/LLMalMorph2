@@ -221,6 +221,104 @@ class MistralAPIProvider(LLMProvider):
             raise LLMAPIRequestError(f"Request failed: {str(e)}")
 
 
+class DeepSeekProvider(LLMProvider):
+    """DeepSeek API provider (OpenAI-compatible)"""
+    
+    BASE_URL = "https://api.deepseek.com"
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """
+        Initialize DeepSeek API provider.
+        
+        Args:
+            api_key: DeepSeek API key. If None, reads from DEEPSEEK_API_KEY env var.
+        
+        Raises:
+            LLMAPIKeyError: If API key is not provided
+        """
+        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
+        if not self.api_key:
+            raise LLMAPIKeyError(
+                "DeepSeek API key not found. Please set DEEPSEEK_API_KEY environment variable "
+                "or provide api_key parameter."
+            )
+        
+        if not OPENAI_AVAILABLE:
+            raise LLMAPIError(
+                "OpenAI library is required for DeepSeek API. Install with: pip install openai"
+            )
+        
+        self.client = OpenAI(api_key=self.api_key, base_url=self.BASE_URL)
+        logger.info("DeepSeek API provider initialized")
+    
+    @retry_on_failure(max_retries=3, delay=1.0, backoff=2.0)
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: str = "deepseek-coder",
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        seed: Optional[int] = None,
+        timeout: int = 120,
+        **kwargs
+    ) -> str:
+        """
+        Generate response using DeepSeek API.
+        
+        Args:
+            system_prompt: System prompt
+            user_prompt: User prompt
+            model: Model name (e.g., "deepseek-coder", "deepseek-chat")
+            temperature: Sampling temperature
+            top_p: Top-p sampling parameter
+            seed: Random seed for reproducibility
+            timeout: Request timeout in seconds
+            **kwargs: Additional parameters
+        
+        Returns:
+            Generated text response
+        
+        Raises:
+            LLMAPIRequestError: If API request fails
+        """
+        logger.debug(f"Calling DeepSeek API with model: {model}, seed: {seed}")
+        start_time = time.time()
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+                top_p=top_p,
+                seed=seed,
+                timeout=timeout,
+            )
+            
+            elapsed_time = time.time() - start_time
+            content = response.choices[0].message.content
+            
+            logger.info(
+                f"DeepSeek API call successful. Model: {model}, "
+                f"Time: {elapsed_time:.2f}s, "
+                f"Tokens: {response.usage.total_tokens if response.usage else 'N/A'}"
+            )
+            
+            return content
+            
+        except Exception as e:
+            error_msg = str(e)
+            if "401" in error_msg or "unauthorized" in error_msg.lower():
+                raise LLMAPIKeyError("Invalid DeepSeek API key")
+            elif "429" in error_msg or "rate" in error_msg.lower():
+                raise LLMAPIRequestError("Rate limit exceeded. Please try again later.")
+            else:
+                raise LLMAPIRequestError(f"DeepSeek API call failed: {error_msg}")
+
+
 class OllamaProvider(LLMProvider):
     """Ollama local provider"""
     
@@ -312,8 +410,8 @@ def get_llm_provider(model_name: str, api_key: Optional[str] = None) -> LLMProvi
     Factory function to get appropriate LLM provider based on model name.
     
     Args:
-        model_name: Model name (e.g., "codestral-2508", "codestral:latest")
-        api_key: Optional API key for Mistral (if None, reads from env)
+        model_name: Model name (e.g., "codestral-2508", "codestral:latest", "deepseek-coder")
+        api_key: Optional API key (if None, reads from env)
     
     Returns:
         LLMProvider instance
@@ -321,6 +419,10 @@ def get_llm_provider(model_name: str, api_key: Optional[str] = None) -> LLMProvi
     Raises:
         ValueError: If model name format is unrecognized
     """
+    # Check if it's a DeepSeek API model
+    if model_name.startswith("deepseek-") and model_name in ["deepseek-coder", "deepseek-chat"]:
+        return DeepSeekProvider(api_key=api_key)
+    
     # Check if it's a Mistral API model (codestral-* or codestral-latest)
     if model_name.startswith("codestral-") or model_name == "codestral-latest":
         # Normalize model name (remove colons, use dashes)
