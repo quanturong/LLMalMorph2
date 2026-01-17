@@ -1,0 +1,256 @@
+"""
+Advanced fix strategies for compilation errors.
+Includes fallback strategies and pattern-based fixes.
+"""
+import re
+import logging
+from typing import List, Tuple, Optional, Dict
+from .error_analyzer import ErrorAnalyzer, ErrorType, ErrorInfo
+
+logger = logging.getLogger(__name__)
+
+
+class FixStrategies:
+    """Advanced fix strategies for handling compilation errors"""
+    
+    @staticmethod
+    def calculate_adaptive_attempts(errors: List[str], base_attempts: int = 3) -> int:
+        """
+        Calculate adaptive number of fix attempts based on error count and types.
+        
+        Args:
+            errors: List of error messages
+            base_attempts: Base number of attempts
+            
+        Returns:
+            Adaptive number of attempts
+        """
+        if not errors:
+            return 1
+        
+        error_count = len(errors)
+        
+        # Analyze error types
+        if ErrorAnalyzer:
+            try:
+                error_infos = ErrorAnalyzer.classify_errors(errors)
+                strategy = ErrorAnalyzer.get_fix_strategy(error_infos)
+                
+                # More attempts for complex errors
+                if strategy.get('has_undefined_symbols') and error_count > 10:
+                    return base_attempts + 2
+                elif strategy.get('has_missing_headers') and error_count > 5:
+                    return base_attempts + 1
+                elif error_count > 20:
+                    return base_attempts + 2
+                elif error_count > 10:
+                    return base_attempts + 1
+            except Exception:
+                pass
+        
+        # Simple heuristic based on error count
+        if error_count > 20:
+            return base_attempts + 2
+        elif error_count > 10:
+            return base_attempts + 1
+        elif error_count > 5:
+            return base_attempts
+        
+        return base_attempts
+    
+    @staticmethod
+    def get_permissive_compiler_flags(language: str) -> List[str]:
+        """
+        Get compiler flags that allow more permissive compilation.
+        
+        Args:
+            language: Programming language
+            
+        Returns:
+            List of compiler flags
+        """
+        flags = []
+        
+        if language == 'cpp':
+            flags.extend([
+                '-fpermissive',  # Downgrade errors to warnings
+                '-Wno-error',    # Don't treat warnings as errors
+            ])
+        elif language == 'c':
+            flags.extend([
+                '-Wno-error',    # Don't treat warnings as errors
+                '-Wno-implicit-function-declaration',  # Allow implicit declarations
+            ])
+        
+        return flags
+    
+    @staticmethod
+    def apply_fallback_strategy(
+        source_code: str,
+        errors: List[str],
+        language: str = "c"
+    ) -> str:
+        """
+        Apply aggressive fallback strategy: comment out problematic sections.
+        
+        Args:
+            source_code: Original source code
+            errors: List of error messages
+            language: Programming language
+            
+        Returns:
+            Code with problematic sections commented out
+        """
+        if not ErrorAnalyzer:
+            return source_code
+        
+        try:
+            error_infos = ErrorAnalyzer.classify_errors(errors)
+            lines = source_code.split('\n')
+            lines_to_comment = set()
+            
+            # Find lines with errors
+            for error_info in error_infos:
+                if error_info.line_num and 1 <= error_info.line_num <= len(lines):
+                    line_idx = error_info.line_num - 1
+                    lines_to_comment.add(line_idx)
+                    
+                    # Also comment out surrounding lines for context
+                    if line_idx > 0:
+                        lines_to_comment.add(line_idx - 1)
+                    if line_idx < len(lines) - 1:
+                        lines_to_comment.add(line_idx + 1)
+            
+            # Comment out problematic lines
+            result_lines = []
+            for i, line in enumerate(lines):
+                if i in lines_to_comment and line.strip() and not line.strip().startswith('//'):
+                    # Comment out the line
+                    if language == 'c' or language == 'cpp':
+                        result_lines.append(f"// FIXME: Commented out due to compilation error\n// {line}")
+                    else:
+                        result_lines.append(f"# FIXME: Commented out due to compilation error\n# {line}")
+                else:
+                    result_lines.append(line)
+            
+            return '\n'.join(result_lines)
+        
+        except Exception as e:
+            logger.warning(f"Fallback strategy failed: {e}")
+            return source_code
+    
+    @staticmethod
+    def create_minimal_working_version(
+        source_code: str,
+        errors: List[str],
+        language: str = "c"
+    ) -> str:
+        """
+        Create a minimal working version by removing problematic code.
+        
+        Args:
+            source_code: Original source code
+            errors: List of error messages
+            language: Programming language
+            
+        Returns:
+            Minimal working version of code
+        """
+        if not ErrorAnalyzer:
+            return source_code
+        
+        try:
+            error_infos = ErrorAnalyzer.classify_errors(errors)
+            strategy = ErrorAnalyzer.get_fix_strategy(error_infos)
+            
+            lines = source_code.split('\n')
+            result_lines = []
+            
+            # Keep only essential parts
+            for i, line in enumerate(lines):
+                # Check if this line has an error
+                has_error = any(
+                    error_info.line_num == i + 1
+                    for error_info in error_infos
+                )
+                
+                if has_error:
+                    # Skip this line and related code
+                    continue
+                
+                # Keep includes (but comment out missing ones)
+                if line.strip().startswith('#include'):
+                    if strategy.get('has_missing_headers'):
+                        missing_headers = strategy.get('missing_headers', [])
+                        header_name = re.search(r'<([^>]+)>|"([^"]+)"', line)
+                        if header_name:
+                            header = header_name.group(1) or header_name.group(2)
+                            if any(mh in header for mh in missing_headers):
+                                result_lines.append(f"// {line}  // Commented: missing header")
+                                continue
+                    result_lines.append(line)
+                else:
+                    result_lines.append(line)
+            
+            return '\n'.join(result_lines)
+        
+        except Exception as e:
+            logger.warning(f"Minimal version creation failed: {e}")
+            return source_code
+    
+    @staticmethod
+    def apply_pattern_fixes(source_code: str, errors: List[str], language: str = "c") -> str:
+        """
+        Apply pattern-based fixes for common error patterns.
+        
+        Args:
+            source_code: Original source code
+            errors: List of error messages
+            language: Programming language
+            
+        Returns:
+            Code with pattern-based fixes applied
+        """
+        fixed_code = source_code
+        
+        # Pattern 1: Missing header - comment out
+        missing_header_pattern = r"fatal error:\s*([^:]+\.h[^:]*):"
+        for error in errors:
+            match = re.search(missing_header_pattern, error, re.IGNORECASE)
+            if match:
+                header_name = match.group(1).strip()
+                # Find and comment out the include
+                include_pattern = rf'#include\s*[<"]{re.escape(header_name)}[>"]'
+                fixed_code = re.sub(
+                    include_pattern,
+                    lambda m: f"// {m.group(0)}  // Commented: missing header",
+                    fixed_code,
+                    flags=re.IGNORECASE
+                )
+        
+        # Pattern 2: Undefined function - add forward declaration
+        undefined_func_pattern = r"undefined reference to ['\"]([^'\"]+)['\"]"
+        forward_decls = []
+        for error in errors:
+            match = re.search(undefined_func_pattern, error, re.IGNORECASE)
+            if match:
+                func_name = match.group(1)
+                # Try to infer function signature (simplified)
+                if func_name not in forward_decls:
+                    forward_decls.append(f"// Forward declaration for {func_name}\nvoid {func_name}();")
+        
+        if forward_decls:
+            # Add forward declarations after includes
+            include_end = fixed_code.rfind('#include')
+            if include_end != -1:
+                # Find end of last include
+                next_line = fixed_code.find('\n', include_end)
+                if next_line != -1:
+                    fixed_code = (
+                        fixed_code[:next_line + 1] +
+                        '\n'.join(forward_decls) + '\n' +
+                        fixed_code[next_line + 1:]
+                    )
+        
+        return fixed_code
+

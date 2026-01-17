@@ -15,6 +15,8 @@ from .quality_assurance import (
     IssueSeverity,
 )
 from .integrated_pipeline import IntegratedPipeline
+from .error_analyzer import ErrorAnalyzer, ErrorType, ErrorInfo
+from .fix_strategies import FixStrategies
 
 __all__ = [
     'CompilationPipeline',
@@ -26,5 +28,9 @@ __all__ = [
     'QualityIssue',
     'IssueSeverity',
     'IntegratedPipeline',
+    'ErrorAnalyzer',
+    'ErrorType',
+    'ErrorInfo',
+    'FixStrategies',
 ]
 

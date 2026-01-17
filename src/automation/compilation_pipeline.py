@@ -126,6 +126,7 @@ class CompilationPipeline:
         include_dirs: List[str] = None,
         library_dirs: List[str] = None,
         libraries: List[str] = None,
+        permissive: bool = False,
     ) -> CompilationResult:
         """
         Compile source file.
@@ -176,6 +177,13 @@ class CompilationPipeline:
         if libraries:
             for lib in libraries:
                 cmd.extend(['-l', lib])
+        
+        # Add permissive flags if requested
+        if permissive:
+            from .fix_strategies import FixStrategies
+            permissive_flags = FixStrategies.get_permissive_compiler_flags(self.language)
+            cmd.extend(permissive_flags)
+            logger.debug(f"Added permissive flags: {permissive_flags}")
         
         # Add additional flags
         if additional_flags:

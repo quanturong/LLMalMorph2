@@ -179,7 +179,21 @@ class IntegratedPipeline:
             
             # 2. Compilation
             logger.info("Compiling...")
+            # Try normal compilation first
             compilation_result = self.compiler_pipeline.compile(temp_file_path)
+            
+            # If compilation fails, try with permissive flags
+            if compilation_result.status == CompilationStatus.FAILED:
+                logger.info("Trying compilation with permissive flags...")
+                permissive_result = self.compiler_pipeline.compile(
+                    temp_file_path,
+                    permissive=True
+                )
+                # Use permissive result if it has fewer errors
+                if (len(permissive_result.errors or []) < len(compilation_result.errors or [])):
+                    compilation_result = permissive_result
+                    logger.info(f"Permissive compilation reduced errors from {len(compilation_result.errors or [])} to {len(permissive_result.errors or [])}")
+            
             results['compilation'] = {
                 'status': compilation_result.status.value,
                 'success': compilation_result.status == CompilationStatus.SUCCESS,
@@ -195,7 +209,15 @@ class IntegratedPipeline:
                 current_code = variant_code
                 last_errors = compilation_result.errors or []
                 
-                for fix_attempt in range(self.max_fix_attempts):
+                # Calculate adaptive attempts based on error count
+                from .fix_strategies import FixStrategies
+                adaptive_attempts = FixStrategies.calculate_adaptive_attempts(
+                    last_errors,
+                    base_attempts=self.max_fix_attempts
+                )
+                logger.info(f"Using {adaptive_attempts} fix attempts (adaptive based on {len(last_errors)} errors)")
+                
+                for fix_attempt in range(adaptive_attempts):
                     # Use more attempts per iteration for better fixing
                     fixed_code, fix_success, _ = self.auto_fixer.fix_compilation_errors(
                         current_code,
@@ -245,6 +267,41 @@ class IntegratedPipeline:
                             logger.warning(f"Fix attempt {fix_attempt + 1} failed: Invalid fixed code type: {type(fixed_code)}")
                         else:
                             logger.warning(f"Fix attempt {fix_attempt + 1} failed to generate fix")
+                        
+                        # Try fallback strategy on last attempt
+                        if fix_attempt == adaptive_attempts - 1:
+                            logger.info("Attempting fallback strategy...")
+                            from .fix_strategies import FixStrategies
+                            fallback_code = FixStrategies.apply_fallback_strategy(
+                                current_code,
+                                last_errors,
+                                language=self.language
+                            )
+                            
+                            if fallback_code != current_code:
+                                current_code = fallback_code
+                                results['fixed_code'] = fallback_code
+                                with open(temp_file_path, 'w') as f:
+                                    f.write(fallback_code)
+                                    f.flush()
+                                    os.fsync(f.fileno())
+                                
+                                # Try compiling with fallback
+                                logger.info("Re-compiling with fallback fixes...")
+                                compilation_result = self.compiler_pipeline.compile(temp_file_path)
+                                
+                                if compilation_result.status == CompilationStatus.SUCCESS:
+                                    logger.info("✓ Compilation successful with fallback strategy!")
+                                    results['compilation'] = {
+                                        'status': compilation_result.status.value,
+                                        'success': True,
+                                        'errors': [],
+                                        'warnings': compilation_result.warnings,
+                                        'executable': compilation_result.executable_path,
+                                        'time': compilation_result.compilation_time,
+                                    }
+                                    variant_code = fallback_code
+                                    break
                         break
                 
                 # Update final compilation result

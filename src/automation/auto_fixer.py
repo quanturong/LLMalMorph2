@@ -6,6 +6,12 @@ import logging
 import re
 from typing import List, Optional, Tuple
 from llm_api import get_llm_provider, LLMAPIError
+try:
+    from .error_analyzer import ErrorAnalyzer, ErrorType
+except ImportError:
+    # Fallback if error_analyzer is not available
+    ErrorAnalyzer = None
+    ErrorType = None
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +45,7 @@ class AutoFixer:
         errors: List[str],
         language: str = "c",
         max_attempts: int = 3,
+        use_pattern_fixes: bool = True,
     ) -> Tuple[str, bool, List[str]]:
         """
         Fix compilation errors using LLM.
@@ -61,42 +68,22 @@ class AutoFixer:
         
         error_text = "\n".join([f"  - {error}" for error in errors])
         
-        system_prompt = (
-            f"You are an expert {language} programmer specializing in fixing compilation errors. "
-            "Your task is to fix ALL compilation errors to make the code compile successfully.\n\n"
-            "CRITICAL INSTRUCTIONS:\n"
-            "1. For missing header files (e.g., 'No such file or directory', 'fatal error'):\n"
-            "   - If the header is NOT used in the code: REMOVE the #include line completely\n"
-            "   - If the header IS used: Comment out the #include and add minimal stub declarations\n"
-            "   - Example: If 'dokani.h' is missing, comment out '#include <dokani.h>' and add:\n"
-            "     // #include <dokani.h>  // Missing header - commented out\n"
-            "     // Minimal stubs if needed\n\n"
-            "2. For undefined types/functions:\n"
-            "   - Add forward declarations or minimal implementations\n"
-            "   - Use void* for unknown types if needed\n\n"
-            "3. For syntax errors:\n"
-            "   - Fix all syntax issues completely\n"
-            "   - Ensure all brackets, parentheses, and semicolons are correct\n\n"
-            "4. IMPORTANT: The code MUST compile successfully after your fix.\n"
-            "   Return ONLY the complete fixed code, nothing else."
-        )
-        
-        # Analyze errors to provide better context
-        missing_headers = [e for e in errors if 'no such file' in e.lower() or 'fatal error' in e.lower()]
-        syntax_errors = [e for e in errors if 'error:' in e.lower() and 'no such file' not in e.lower()]
-        
-        error_context = ""
-        if missing_headers:
-            error_context += "\nMISSING HEADERS DETECTED:\n"
-            for err in missing_headers[:5]:  # Limit to first 5
-                error_context += f"  - {err}\n"
-            error_context += "\nACTION REQUIRED: Comment out or remove these #include statements.\n\n"
-        
-        if syntax_errors:
-            error_context += "SYNTAX ERRORS:\n"
-            for err in syntax_errors[:5]:  # Limit to first 5
-                error_context += f"  - {err}\n"
-            error_context += "\nACTION REQUIRED: Fix all syntax errors.\n\n"
+        # Analyze errors to get better context
+        if ErrorAnalyzer:
+            try:
+                error_infos = ErrorAnalyzer.classify_errors(errors)
+                strategy = ErrorAnalyzer.get_fix_strategy(error_infos)
+                # Build context-aware system prompt
+                system_prompt = self._build_system_prompt(language, strategy)
+                # Build detailed error context
+                error_context = self._build_error_context(error_infos, strategy)
+            except Exception as e:
+                logger.warning(f"Error analysis failed, using fallback: {e}")
+                system_prompt = self._build_fallback_system_prompt(language)
+                error_context = self._build_fallback_error_context(errors)
+        else:
+            system_prompt = self._build_fallback_system_prompt(language)
+            error_context = self._build_fallback_error_context(errors)
         
         user_prompt = f"""
 The following {language} code has compilation errors that prevent it from compiling:
@@ -142,6 +129,7 @@ The fixed code MUST compile without errors.
                     
                     # Update user_prompt for next attempt with fixed code if needed
                     if attempt < max_attempts - 1:
+                        # Re-analyze errors for next attempt (will be updated by caller with new errors)
                         user_prompt = f"""
 The following {language} code still has compilation errors after previous fix attempt:
 
@@ -152,10 +140,12 @@ The following {language} code still has compilation errors after previous fix at
 Previous Errors:
 {error_text}
 
-Please fix the remaining compilation errors. Make sure to:
-1. Comment out or remove missing header includes
-2. Add minimal stub declarations if needed
-3. Fix any syntax errors
+{error_context}
+
+Please fix the REMAINING compilation errors. Be more aggressive:
+1. Comment out problematic code sections if they can't be fixed
+2. Add minimal stub implementations for missing functions
+3. Remove or comment out unused includes and code
 4. Ensure the code compiles successfully
 
 Return only the fixed code within code blocks (```{language} ... ```).
@@ -291,4 +281,137 @@ Please fix these issues. Return only the fixed code within code blocks.
                 return response.strip()
         
         return None
+    
+    def _build_fallback_system_prompt(self, language: str) -> str:
+        """Fallback system prompt when error analyzer is not available"""
+        return (
+            f"You are an expert {language} programmer specializing in fixing compilation errors. "
+            "Your task is to fix ALL compilation errors to make the code compile successfully.\n\n"
+            "CRITICAL INSTRUCTIONS:\n"
+            "1. For missing header files: Comment them out or remove them, add minimal stubs if needed\n"
+            "2. For undefined symbols: Add forward declarations or minimal implementations\n"
+            "3. For syntax errors: Fix all syntax issues completely\n"
+            "4. IMPORTANT: The code MUST compile successfully after your fix.\n"
+            "   Return ONLY the complete fixed code, nothing else."
+        )
+    
+    def _build_fallback_error_context(self, errors: List[str]) -> str:
+        """Fallback error context when error analyzer is not available"""
+        missing_headers = [e for e in errors if 'no such file' in e.lower() or 'fatal error' in e.lower()]
+        syntax_errors = [e for e in errors if 'error:' in e.lower() and 'no such file' not in e.lower()]
+        
+        context = ""
+        if missing_headers:
+            context += "\n⚠️ MISSING HEADERS DETECTED:\n"
+            for err in missing_headers[:5]:
+                context += f"    - {err}\n"
+            context += "\n  ACTION: Comment out #include statements and add minimal stubs.\n\n"
+        
+        if syntax_errors:
+            context += "\n⚠️ SYNTAX ERRORS DETECTED:\n"
+            for err in syntax_errors[:5]:
+                context += f"    - {err}\n"
+            context += "\n  ACTION: Fix all syntax issues completely.\n\n"
+        
+        return context
+    
+    def _build_system_prompt(self, language: str, strategy: dict) -> str:
+        """Build system prompt based on error analysis strategy"""
+        prompt = (
+            f"You are an expert {language} programmer specializing in fixing compilation errors. "
+            "Your task is to fix ALL compilation errors to make the code compile successfully.\n\n"
+            "CRITICAL INSTRUCTIONS:\n"
+        )
+        
+        if strategy.get('has_missing_headers'):
+            prompt += (
+                "1. For missing header files (e.g., 'No such file or directory', 'fatal error'):\n"
+                "   - If the header is NOT used in the code: REMOVE the #include line completely\n"
+                "   - If the header IS used: Comment out the #include and add minimal stub declarations\n"
+                "   - For each missing header, add forward declarations for types/functions used\n"
+                "   - Example: If 'dokani.h' is missing, comment out '#include <dokani.h>' and add:\n"
+                "     // #include <dokani.h>  // Missing header - commented out\n"
+                "     // Forward declarations for types/functions from dokani.h\n\n"
+            )
+        
+        if strategy.get('has_undefined_symbols'):
+            prompt += (
+                "2. For undefined symbols (functions, variables, types):\n"
+                "   - Add forward declarations at the top of the file\n"
+                "   - For functions: Add minimal stub implementations if needed\n"
+                "   - For types: Use void* or add minimal struct definitions\n"
+                "   - For variables: Add extern declarations or remove if unused\n\n"
+            )
+        
+        if strategy.get('has_syntax_errors'):
+            prompt += (
+                "3. For syntax errors:\n"
+                "   - Fix all syntax issues completely (missing semicolons, brackets, etc.)\n"
+                "   - Ensure all brackets, parentheses, and semicolons are correct\n"
+                "   - Check for typos in keywords and identifiers\n\n"
+            )
+        
+        if strategy.get('has_type_mismatches'):
+            prompt += (
+                "4. For type mismatches:\n"
+                "   - Add explicit type casts where needed\n"
+                "   - Fix function signatures to match declarations\n"
+                "   - Ensure return types match function definitions\n\n"
+            )
+        
+        prompt += (
+            "5. IMPORTANT: The code MUST compile successfully after your fix.\n"
+            "   - Be aggressive: Comment out problematic code if necessary\n"
+            "   - Add minimal stubs to make code compile\n"
+            "   - Return ONLY the complete fixed code, nothing else.\n"
+        )
+        
+        return prompt
+    
+    def _build_error_context(self, error_infos: List, strategy: dict) -> str:
+        """Build detailed error context for LLM"""
+        context = ""
+        
+        if strategy.get('has_missing_headers'):
+            context += "\n⚠️ MISSING HEADERS DETECTED:\n"
+            missing_headers = strategy.get('missing_headers', [])
+            if missing_headers:
+                context += "  Headers to fix:\n"
+                for header in missing_headers[:10]:  # Limit to first 10
+                    context += f"    - {header}\n"
+            else:
+                # Fallback to showing error messages
+                header_errors = [e.error_text for e in error_infos if e.error_type == ErrorType.MISSING_HEADER]
+                for err in header_errors[:5]:
+                    context += f"    - {err}\n"
+            context += "\n  ACTION: Comment out #include statements and add minimal stubs.\n\n"
+        
+        if strategy.get('has_undefined_symbols'):
+            context += "\n⚠️ UNDEFINED SYMBOLS DETECTED:\n"
+            undefined_symbols = strategy.get('undefined_symbols', [])
+            if undefined_symbols:
+                context += "  Symbols to fix:\n"
+                for symbol in undefined_symbols[:10]:  # Limit to first 10
+                    context += f"    - {symbol}\n"
+            else:
+                symbol_errors = [e.error_text for e in error_infos if e.error_type == ErrorType.UNDEFINED_SYMBOL]
+                for err in symbol_errors[:5]:
+                    context += f"    - {err}\n"
+            context += "\n  ACTION: Add forward declarations or stub implementations.\n\n"
+        
+        if strategy.get('has_syntax_errors'):
+            context += "\n⚠️ SYNTAX ERRORS DETECTED:\n"
+            syntax_errors = [e.error_text for e in error_infos if e.error_type == ErrorType.SYNTAX_ERROR]
+            for err in syntax_errors[:5]:
+                context += f"    - {err}\n"
+            context += "\n  ACTION: Fix all syntax issues completely.\n\n"
+        
+        # Show error type summary
+        if strategy.get('error_types'):
+            context += "\n📊 ERROR SUMMARY:\n"
+            for error_type, count in strategy['error_types'].items():
+                context += f"  - {error_type}: {count} error(s)\n"
+            context += "\n"
+        
+        return context
 
