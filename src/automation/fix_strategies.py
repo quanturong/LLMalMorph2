@@ -110,6 +110,8 @@ class FixStrategies:
             comment_char = "//" if language in ['c', 'cpp'] else "#"
             
             # Extract line numbers from errors
+            # Only comment out the exact line with error, not surrounding lines
+            # to avoid creating new errors
             for error in errors:
                 # Pattern: "file.c:123:45: error: ..."
                 match = re.search(r':(\d+):\d+:', error)
@@ -118,13 +120,9 @@ class FixStrategies:
                         line_num = int(match.group(1))
                         if 1 <= line_num <= len(lines):
                             line_idx = line_num - 1
+                            # Only comment out the exact line, not surrounding lines
+                            # to avoid breaking related code
                             lines_to_comment.add(line_idx)
-                            
-                            # Also comment out surrounding lines for context
-                            if line_idx > 0:
-                                lines_to_comment.add(line_idx - 1)
-                            if line_idx < len(lines) - 1:
-                                lines_to_comment.add(line_idx + 1)
                     except (ValueError, IndexError):
                         continue
             
@@ -132,16 +130,17 @@ class FixStrategies:
             if ErrorAnalyzer:
                 try:
                     error_infos = ErrorAnalyzer.classify_errors(errors)
-                    strategy = ErrorAnalyzer.get_fix_strategy(error_infos)
+                    missing_headers = ErrorAnalyzer.extract_missing_headers(error_infos)
                     
                     # For missing headers, comment out the include lines
-                    if strategy.get('has_missing_headers'):
-                        missing_headers = strategy.get('missing_headers', [])
+                    if missing_headers:
                         for i, line in enumerate(lines):
                             if line.strip().startswith('#include'):
                                 # Check if this include matches any missing header
                                 for header in missing_headers:
-                                    if header in line:
+                                    # Match header name (handle both <header> and "header" formats)
+                                    header_basename = header.split('/')[-1].split('\\')[-1]
+                                    if header_basename in line or header in line:
                                         lines_to_comment.add(i)
                                         break
                 except Exception:

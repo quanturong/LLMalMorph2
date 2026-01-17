@@ -308,7 +308,20 @@ class IntegratedPipeline:
                                     }
                                     variant_code = fallback_code
                                 else:
-                                    logger.info(f"Fallback strategy reduced errors from {remaining_error_count} to {len(fallback_compilation.errors or [])}")
+                                    new_error_count = len(fallback_compilation.errors or [])
+                                    if new_error_count < remaining_error_count:
+                                        logger.info(f"Fallback strategy reduced errors from {remaining_error_count} to {new_error_count}")
+                                        compilation_result = fallback_compilation
+                                    elif new_error_count > remaining_error_count:
+                                        logger.warning(f"Fallback strategy increased errors from {remaining_error_count} to {new_error_count}, reverting...")
+                                        # Revert to original code
+                                        current_code = variant_code
+                                        with open(temp_file_path, 'w') as f:
+                                            f.write(current_code)
+                                            f.flush()
+                                            os.fsync(f.fileno())
+                                    else:
+                                        logger.info(f"Fallback strategy did not change error count ({remaining_error_count} errors)")
                         except Exception as e:
                             logger.warning(f"Fallback strategy failed: {e}")
                 
