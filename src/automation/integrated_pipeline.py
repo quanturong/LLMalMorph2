@@ -277,8 +277,18 @@ class IntegratedPipeline:
                         logger.info(f"Attempting fallback strategy for {remaining_error_count} remaining error(s)...")
                         try:
                             from .fix_strategies import FixStrategies
-                            fallback_code = FixStrategies.apply_fallback_strategy(
+                            # Also try pattern-based fixes before fallback
+                            pattern_fixed_code = FixStrategies.apply_pattern_fixes(
                                 current_code,
+                                compilation_result.errors or [],
+                                language=self.language
+                            )
+                            
+                            # Use pattern-fixed code if it changed, otherwise use original
+                            code_to_fallback = pattern_fixed_code if pattern_fixed_code != current_code else current_code
+                            
+                            fallback_code = FixStrategies.apply_fallback_strategy(
+                                code_to_fallback,
                                 compilation_result.errors or [],
                                 language=self.language
                             )
@@ -322,6 +332,8 @@ class IntegratedPipeline:
                                             os.fsync(f.fileno())
                                     else:
                                         logger.info(f"Fallback strategy did not change error count ({remaining_error_count} errors)")
+                            else:
+                                logger.info(f"Fallback strategy could not modify code (no actionable errors found)")
                         except Exception as e:
                             logger.warning(f"Fallback strategy failed: {e}")
                 

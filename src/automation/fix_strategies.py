@@ -113,8 +113,8 @@ class FixStrategies:
             # Only comment out the exact line with error, not surrounding lines
             # to avoid creating new errors
             for error in errors:
-                # Pattern: "file.c:123:45: error: ..."
-                match = re.search(r':(\d+):\d+:', error)
+                # Pattern 1: "file.c:123:45: error: ..." or "file.c:123: error: ..."
+                match = re.search(r':(\d+)(?::\d+)?:\s*(?:error|warning|fatal)', error)
                 if match:
                     try:
                         line_num = int(match.group(1))
@@ -122,6 +122,17 @@ class FixStrategies:
                             line_idx = line_num - 1
                             # Only comment out the exact line, not surrounding lines
                             # to avoid breaking related code
+                            lines_to_comment.add(line_idx)
+                    except (ValueError, IndexError):
+                        continue
+                
+                # Pattern 2: "At line 123" or "line 123"
+                match = re.search(r'(?:at\s+)?line\s+(\d+)', error, re.IGNORECASE)
+                if match:
+                    try:
+                        line_num = int(match.group(1))
+                        if 1 <= line_num <= len(lines):
+                            line_idx = line_num - 1
                             lines_to_comment.add(line_idx)
                     except (ValueError, IndexError):
                         continue
